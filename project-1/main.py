@@ -1,4 +1,5 @@
 import sys
+from PySide6 import QtCore
 from PySide6.QtCore import QDate, QFile, Qt, QTextStream
 from PySide6 import QtGui, QtWidgets 
 
@@ -19,16 +20,112 @@ def cmyk_to_rgb(c, m, y, k):
     b = 255 * (1 - y) * (1 - k)
     return round(r), round(g), round(b)
 
+class BaseGraphicsItem(QtWidgets.QGraphicsItem):
+    def __init__(self, width, height):
+        super().__init__()
+        self.setFlags(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setAcceptHoverEvents(True)
+        self.width = width
+        self.height = height
+        self.handles = []
+        self._dragging = False
+        self._last_mouse_pos = None
+
+    def boundingRect(self):
+        return QtCore.QRectF(0, 0, self.width, self.height)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._dragging = True
+            self._last_mouse_pos = event.scenePos()
+
+            scene = self.scene()
+            if scene:
+                for item in scene.selectedItems():
+                    item.setSelected(False)
+            self.setSelected(True)
+
+            event.accept()
+        else:
+            event.ignore() 
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            delta = event.scenePos() - self._last_mouse_pos
+            self.setPos(self.pos() + delta)
+            self._last_mouse_pos = event.scenePos()
+            event.accept()
+        else:
+            event.ignore()
+    
+    # Make item on top when selected
+    def itemChange(self, change, value):
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSelectedChange:
+            if value: 
+                if self.scene():
+                    max_z = max((item.zValue() for item in self.scene().items()), default=0)
+                    self.setZValue(max_z + 1)
+        return super().itemChange(change, value)
+
+class RectItem(BaseGraphicsItem):
+    def __init__(self, width, height, color):
+        super().__init__(width, height)
+        self.rect_color = QtGui.QColor(color)
+
+    def paint(self, painter, option, widget=None):
+        painter.setBrush(QtGui.QBrush(self.rect_color))
+        painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
+        painter.drawRect(self.boundingRect())
+
+class EllipseItem(BaseGraphicsItem):
+    def __init__(self, width, height, color):
+        super().__init__(width, height)
+        self.ellipse_color = QtGui.QColor(color)
+
+    def paint(self, painter, option, widget=None):
+        painter.setBrush(QtGui.QBrush(self.ellipse_color))
+        painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
+        painter.drawEllipse(self.boundingRect())
+
+class LineItem(BaseGraphicsItem):
+    def __init__(self, p1, p2, color):
+        self.p1 = p1
+        self.p2 = p2
+        rect = QtCore.QRectF(p1, p2).normalized()
+        super().__init__(rect.width(), rect.height())
+        self.line_color = QtGui.QColor(color)
+
+    def boundingRect(self):
+        padding = 3
+        return QtCore.QRectF(self.p1, self.p2).normalized().adjusted(-padding, -padding, padding, padding)
+
+    def paint(self, painter, option, widget=None):
+        painter.setPen(QtGui.QPen(self.line_color, 3))
+        painter.drawLine(self.p1, self.p2)
+
+class CustomScene(QtWidgets.QGraphicsScene):
+    def __init__(self, mouse_press_callback=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mouse_press_callback = mouse_press_callback
+
+    def mousePressEvent(self, event):
+        if callable(self.mouse_press_callback):
+            self.mouse_press_callback(event)
+        super().mousePressEvent(event)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         QtWidgets.QMainWindow.__init__(self)
         self.setWindowTitle("Project 1")
-        self.setMinimumSize(600, 600)
+        self.setFixedSize(800, 800)
 
-        central = QtWidgets.QTextEdit("Main content")
-        self.setCentralWidget(central)
+        self.scene = CustomScene(mouse_press_callback=self.on_scene_mouse_press)
+        self.scene.setSceneRect(0, 0, 540, 780)
+        view = QtWidgets.QGraphicsView(self.scene)
+        view.setFixedSize(550, 790)
+        self.setCentralWidget(view)
 
-        # Create tools dock
         dock = QtWidgets.QDockWidget("Narzędzia", self)
         dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         dock.setFixedWidth(220)
@@ -131,6 +228,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addStretch()
         
         self.updating_color = False
+        self.drawing_points = []
         self.on_color_mode_changed("RGB")
         self.set_rgb(0, 0, 0)
 
@@ -206,10 +304,52 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.update_color_preview(r,g,b)
         self.updating_color = False
+    
+    def on_scene_mouse_press(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.drawing_points.append(event.scenePos())
+            mode = self.primitive_group.checkedId()
+            if len(self.drawing_points) >= 2:
+                p1 = self.drawing_points.pop(0)
+                p2 = self.drawing_points.pop(0)
+                if mode == 0:
+                    self.draw_line(p1.x(), p1.y(), p2.x(), p2.y())
+                elif mode == 1:
+                    x = min(p1.x(), p2.x())
+                    y = min(p1.y(), p2.y())
+                    w = abs(p2.x() - p1.x())
+                    h = abs(p2.y() - p1.y())
+                    self.draw_rect(x, y, w, h)
+                elif mode == 2: 
+                    x = min(p1.x(), p2.x())
+                    y = min(p1.y(), p2.y())
+                    w = abs(p2.x() - p1.x())
+                    h = abs(p2.y() - p1.y())
+                    self.draw_ellipse(x, y, w, h)
+
+    def get_current_color(self):
+        return QtGui.QColor(self.rgb_controls['R'][0].value(),self.rgb_controls['G'][0].value(),self.rgb_controls['B'][0].value())
+
+    def draw_line(self, x1, y1, x2, y2):
+        color = self.get_current_color()
+        p1 = QtCore.QPointF(x1, y1)
+        p2 = QtCore.QPointF(x2, y2)
+        line = LineItem(p1, p2, color)
+        self.scene.addItem(line)
+
+    def draw_rect(self, x, y, w, h):
+        color = self.get_current_color()
+        rect = RectItem(w, h, color)
+        rect.setPos(x, y)
+        self.scene.addItem(rect)
+
+    def draw_ellipse(self, x, y, w, h):
+        color = self.get_current_color()
+        rect = EllipseItem(w, h, color)
+        rect.setPos(x, y)
+        self.scene.addItem(rect)
 
 
-
-    # def create_dock(self):
     #     group = QtWidgets.QGroupBox("Primitives")
     #     layout = QtWidgets.QVBoxLayout()
     #     layout.addWidget(QtWidgets.QPushButton("Triangle"))
