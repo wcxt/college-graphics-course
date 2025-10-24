@@ -122,6 +122,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.scene = CustomScene(mouse_press_callback=self.on_scene_mouse_press)
         self.scene.setSceneRect(0, 0, 540, 780)
+        self.scene.selectionChanged.connect(self.on_scene_item_select)
         view = QtWidgets.QGraphicsView(self.scene)
         view.setFixedSize(550, 790)
         self.setCentralWidget(view)
@@ -157,6 +158,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.param_textbox.setPlaceholderText("Dla linii: x1 y1 x2 y2\nDla prostokąta: x y w h\nDla okręgu: x y r")
         self.param_textbox.setFixedHeight(100)
         create_button = QtWidgets.QPushButton('Utwórz z parametrów')
+        create_button.clicked.connect(self.draw_from_params)
         layout.addWidget(self.param_textbox)
         layout.addWidget(create_button)
 
@@ -306,6 +308,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.updating_color = False
     
     def on_scene_mouse_press(self, event):
+        selected = self.scene.selectedItems()
+        if len(selected) >= 1:
+            return
+         
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.drawing_points.append(event.scenePos())
             mode = self.primitive_group.checkedId()
@@ -348,6 +354,52 @@ class MainWindow(QtWidgets.QMainWindow):
         rect = EllipseItem(w, h, color)
         rect.setPos(x, y)
         self.scene.addItem(rect)
+
+    def draw_from_params(self):
+
+        params = []
+        text = self.param_textbox.toPlainText().split(",")
+        for text_param in text:
+            try:
+                params.append(float(text_param))
+            except ValueError:
+                QtWidgets.QMessageBox.warning(self, 'Błąd', 'Nieprawidłowy format')
+
+        selected = self.scene.selectedItems()
+        if len(selected) >= 1:
+            item = selected[0]
+            if isinstance(item, LineItem):
+                item.p1 = QtCore.QPointF(params[0], params[1])
+                item.p2 = QtCore.QPointF(params[2], params[3])
+            elif isinstance(item, BaseGraphicsItem):    
+                item.setX(params[0])
+                item.setY(params[1])
+                item.width = params[2]
+                item.height = params[3]
+            self.scene.update()
+            return
+         
+
+        mode = self.primitive_group.checkedId()
+        if mode == 0:
+            self.draw_line(params[0], params[1], params[2], params[3])
+        elif mode == 1:
+            self.draw_rect(params[0], params[1], params[2], params[3])
+        elif mode == 2:
+            self.draw_ellipse(params[0], params[1], params[2], params[3])
+
+    # TODO: Update textbox also when moving item
+    # TODO: Fix positioning when it comes to points
+    def on_scene_item_select(self):
+        selected = self.scene.selectedItems()
+        if len(selected) <= 0: return
+
+        item = selected[0]
+        p1 = item.scenePos()
+        if isinstance(item, LineItem):
+            self.param_textbox.setPlainText(str(int(item.p1.x()) + int(p1.x())) + ", " + str(int(item.p1.y()) + int(p1.y())) + ", " + str(int(item.p2.x()) + int(p1.x())) + ", " + str(int(item.p2.y()) + int(p1.y())))
+        elif isinstance(item, BaseGraphicsItem):
+            self.param_textbox.setPlainText(str(int(p1.x())) + ", " + str(int(p1.y())) + ", " + str(int(item.width)) + ", " + str(int(item.height)))
 
 
     #     group = QtWidgets.QGroupBox("Primitives")
