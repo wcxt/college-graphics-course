@@ -20,6 +20,46 @@ def cmyk_to_rgb(c, m, y, k):
     b = 255 * (1 - y) * (1 - k)
     return round(r), round(g), round(b)
 
+class ResizeHandle(QtWidgets.QGraphicsRectItem):
+    SIZE = 8
+
+    def __init__(self, parent, position):
+        super().__init__(-ResizeHandle.SIZE/2, -ResizeHandle.SIZE/2,
+                         ResizeHandle.SIZE, ResizeHandle.SIZE, parent)
+        self.setBrush(QtGui.QBrush(QtGui.QColor("white")))
+        self.setPen(QtGui.QPen(QtGui.QColor("black")))
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsScenePositionChanges, True)
+        self.position = position  # 'tl', 'tr', 'bl', 'br'
+        self.setCursor({
+            'tl': QtCore.Qt.CursorShape.SizeFDiagCursor,
+            'br': QtCore.Qt.CursorShape.SizeFDiagCursor,
+            'tr': QtCore.Qt.CursorShape.SizeBDiagCursor,
+            'bl': QtCore.Qt.CursorShape.SizeBDiagCursor,
+        }[position])
+        self._dragging = False
+        self._updating = False  # <--- reentrancy guard
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = True
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging:
+            self._dragging = False
+        super().mouseReleaseEvent(event)
+
+    def itemChange(self, change, value):
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemScenePositionHasChanged:
+            parent = self.parentItem()
+            if parent and self._dragging and not self._updating and hasattr(parent, "handle_moved"):
+                print("Updating")
+                self._updating = True
+                parent.handle_moved(self.position, value)
+                self._updating = False
+        return super().itemChange(change, value)
+
 class BaseGraphicsItem(QtWidgets.QGraphicsItem):
     def __init__(self, width, height):
         super().__init__()
@@ -27,9 +67,39 @@ class BaseGraphicsItem(QtWidgets.QGraphicsItem):
         self.setAcceptHoverEvents(True)
         self.width = width
         self.height = height
-        self.handles = []
+        self.handles = {}
         self._dragging = False
         self._last_mouse_pos = None
+        self.x_change = 0
+        self.y_change = 0
+
+        self.create_handles()
+
+    def create_handles(self):
+        rect = self.boundingRect()
+        positions = {
+            'tl': rect.topLeft(),
+            'tr': rect.topRight(),
+            'bl': rect.bottomLeft(),
+            'br': rect.bottomRight(),
+        }
+        for name, pos in positions.items():
+            handle = ResizeHandle(self, name)
+            handle.setPos(pos)
+            handle.setVisible(False)
+            self.handles[name] = handle
+
+    def update_handles(self):
+        print("Manual Handle Update")
+        rect = self.boundingRect()
+        pos_map = {
+            'tl': rect.topLeft(),
+            'tr': rect.topRight(),
+            'br': rect.bottomRight(),
+            'bl': rect.bottomLeft(),
+        }
+        for name, handle in self.handles.items():
+            handle.setPos(pos_map[name])
 
     def boundingRect(self):
         return QtCore.QRectF(0, 0, self.width, self.height)
@@ -54,6 +124,8 @@ class BaseGraphicsItem(QtWidgets.QGraphicsItem):
             delta = event.scenePos() - self._last_mouse_pos
             self.setPos(self.pos() + delta)
             self._last_mouse_pos = event.scenePos()
+            self.x_change = 0
+            self.y_change = 0
             event.accept()
         else:
             event.ignore()
@@ -65,6 +137,9 @@ class BaseGraphicsItem(QtWidgets.QGraphicsItem):
                 if self.scene():
                     max_z = max((item.zValue() for item in self.scene().items()), default=0)
                     self.setZValue(max_z + 1)
+            visible = bool(value)
+            for h in self.handles.values():
+                h.setVisible(visible)
         return super().itemChange(change, value)
 
 class RectItem(BaseGraphicsItem):
@@ -77,6 +152,51 @@ class RectItem(BaseGraphicsItem):
         painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
         painter.drawRect(self.boundingRect())
 
+    def handle_moved(self, position, scene_pos):
+        local = self.mapFromScene(scene_pos)
+        rect = QtCore.QRectF(self.boundingRect())
+
+        print("handle moved")
+        self.prepareGeometryChange()
+        if position == 'tl':
+            dx = local.x() - self.x_change
+            dy = local.y() - self.y_change
+            self.setPos(self.pos() + QtCore.QPointF(dx, dy))
+            self.width -= dx
+            self.height -= dy
+            self.x_change += dx
+            self.y_change += dy
+
+        elif position == 'tr':
+            dx = local.x() - rect.right()
+            dy = local.y() - self.y_change
+            self.setY(self.y() + dy)
+            self.width += dx
+            self.height -= dy
+            self.y_change += dy
+
+        elif position == 'bl':
+            print("locx: " + str(local.x()) + " locy: " + str(local.y()))
+            dx = local.x() - self.x_change
+            dy = local.y() - rect.bottom()
+            print("dx: " + str(dx) + " dy: " + str(dy))
+            self.setX(self.x() + dx) 
+            self.width -= dx
+            self.height += dy
+            self.x_change += dx
+
+        elif position == 'br':
+            dx = local.x() - rect.right()
+            dy = local.y() - rect.bottom()
+            self.width += dx
+            self.height += dy
+
+        self.width = max(10, abs(self.width))
+        self.height = max(10, abs(self.height))
+        
+        self.update_handles()
+        self.update()
+        
     def to_json(self):
         color = self.rect_color
         return {
@@ -96,6 +216,50 @@ class EllipseItem(BaseGraphicsItem):
         painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
         painter.drawEllipse(self.boundingRect())
 
+    def handle_moved(self, position, scene_pos):
+        local = self.mapFromScene(scene_pos)
+        rect = QtCore.QRectF(self.boundingRect())
+
+        self.prepareGeometryChange()
+        if position == 'tl':
+            dx = local.x() - self.x_change
+            dy = local.y() - self.y_change
+            self.setPos(self.pos() + QtCore.QPointF(dx, dy))
+            self.width -= dx
+            self.height -= dy
+            self.x_change += dx
+            self.y_change += dy
+
+        elif position == 'tr':
+            dx = local.x() - rect.right()
+            dy = local.y() - self.y_change
+            self.setY(self.y() + dy)
+            self.width += dx
+            self.height -= dy
+            self.y_change += dy
+
+        elif position == 'bl':
+            print("locx: " + str(local.x()) + " locy: " + str(local.y()))
+            dx = local.x() - self.x_change
+            dy = local.y() - rect.bottom()
+            print("dx: " + str(dx) + " dy: " + str(dy))
+            self.setX(self.x() + dx) 
+            self.width -= dx
+            self.height += dy
+            self.x_change += dx
+
+        elif position == 'br':
+            dx = local.x() - rect.right()
+            dy = local.y() - rect.bottom()
+            self.width += dx
+            self.height += dy
+
+        self.width = max(10, abs(self.width))
+        self.height = max(10, abs(self.height))
+        
+        self.update_handles()
+        self.update()
+     
     def to_json(self):
         color = self.ellipse_color
         return {
@@ -121,6 +285,40 @@ class LineItem(BaseGraphicsItem):
         painter.setPen(QtGui.QPen(self.line_color, 3))
         painter.drawLine(self.p1, self.p2)
 
+    def handle_moved(self, position, scene_pos):
+        local = self.mapFromScene(scene_pos)
+        rect = QtCore.QRectF(self.p1, self.p2).normalized()  # bounding rect of the line
+
+        self.prepareGeometryChange()
+
+        if position == 'tl':
+            rect.setTopLeft(local)
+        elif position == 'tr':
+            rect.setTopRight(local)
+        elif position == 'bl':
+            rect.setBottomLeft(local)
+        elif position == 'br':
+            rect.setBottomRight(local)
+        
+        # p1 -> p2
+        if self.p1.x() < self.p2.x():
+            if self.p1.y() < self.p2.y():
+                self.p1 = rect.topLeft()
+                self.p2 = rect.bottomRight()
+            else:
+                self.p1 = rect.bottomLeft()
+                self.p2 = rect.topRight()
+        else:
+            if self.p1.y() > self.p2.y():
+                self.p2 = rect.topLeft()
+                self.p1 = rect.bottomRight()
+            else:
+                self.p2 = rect.bottomLeft()
+                self.p1 = rect.topRight()
+
+        self.update_handles()
+        self.update()
+    
     def to_json(self):
         color = self.line_color
         return {
@@ -128,8 +326,6 @@ class LineItem(BaseGraphicsItem):
             'x1': self.p1.x(), 'y1': self.p1.y(), 'x2': self.p2.x(), 'y2': self.p2.y(),
             'color': {'r': color.red(), 'g': color.green(), 'b': color.blue()},
         }
-
-
 
 class CustomScene(QtWidgets.QGraphicsScene):
     def __init__(self, mouse_press_callback=None, *args, **kwargs):
@@ -230,7 +426,6 @@ class MainWindow(QtWidgets.QMainWindow):
             layout.addLayout(row)
             self.rgb_controls[name] = (value_slider, value_spin)
 
-        # CMYK controls
         self.cmyk_controls = {}
         for name in ('C', 'M', 'Y', 'K'):
             row = QtWidgets.QHBoxLayout()
@@ -406,6 +601,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 item.setY(params[1])
                 item.width = params[2]
                 item.height = params[3]
+            item.update_handles()
             self.scene.update()
             return
          
@@ -481,23 +677,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 line = LineItem(p1, p2, color)
                 self.scene.addItem(line)
 
-
-
-    #     group = QtWidgets.QGroupBox("Primitives")
-    #     layout = QtWidgets.QVBoxLayout()
-    #     layout.addWidget(QtWidgets.QPushButton("Triangle"))
-    #     layout.addWidget(QtWidgets.QPushButton("Triangle"))
-    #     layout.addWidget(QtWidgets.QPushButton("Triangle"))
-    #     group.setLayout(layout)
-    #
-    #     flayout = QtWidgets.QVBoxLayout()
-    #     flayout.addWidget(group, 0, alignment=Qt.AlignmentFlag.AlignTop)
-    #     widget = QtWidgets.QWidget()
-    #     widget.setLayout(flayout)
-    #
-    #     dockWidget.setWidget(widget)
-    #     return dockWidget
-    #
 if __name__ == "__main__":
     app = QtWidgets.QApplication([])
     window = MainWindow()
