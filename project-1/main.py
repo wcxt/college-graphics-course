@@ -38,7 +38,7 @@ class ResizeHandle(QtWidgets.QGraphicsRectItem):
             'bl': QtCore.Qt.CursorShape.SizeBDiagCursor,
         }[position])
         self._dragging = False
-        self._updating = False  # <--- reentrancy guard
+        self._updating = False
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -287,7 +287,7 @@ class LineItem(BaseGraphicsItem):
 
     def handle_moved(self, position, scene_pos):
         local = self.mapFromScene(scene_pos)
-        rect = QtCore.QRectF(self.p1, self.p2).normalized()  # bounding rect of the line
+        rect = QtCore.QRectF(self.p1, self.p2).normalized()
 
         self.prepareGeometryChange()
 
@@ -321,9 +321,11 @@ class LineItem(BaseGraphicsItem):
     
     def to_json(self):
         color = self.line_color
+        p1 = self.p1 + self.pos()
+        p2 = self.p2 + self.pos()
         return {
             'type': 'line',
-            'x1': self.p1.x(), 'y1': self.p1.y(), 'x2': self.p2.x(), 'y2': self.p2.y(),
+            'x1': p1.x(), 'y1': p1.y(), 'x2': p2.x(), 'y2': p2.y(),
             'color': {'r': color.red(), 'g': color.green(), 'b': color.blue()},
         }
 
@@ -614,8 +616,6 @@ class MainWindow(QtWidgets.QMainWindow):
         elif mode == 2:
             self.draw_ellipse(params[0], params[1], params[2], params[3])
 
-    # TODO: Update textbox also when moving item
-    # TODO: Fix positioning when it comes to points
     def on_scene_item_select(self):
         selected = self.scene.selectedItems()
         if len(selected) <= 0: return
