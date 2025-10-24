@@ -1,4 +1,4 @@
-import sys
+import sys, json
 from PySide6 import QtCore
 from PySide6.QtCore import QDate, QFile, Qt, QTextStream
 from PySide6 import QtGui, QtWidgets 
@@ -77,6 +77,15 @@ class RectItem(BaseGraphicsItem):
         painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
         painter.drawRect(self.boundingRect())
 
+    def to_json(self):
+        color = self.rect_color
+        return {
+            'type': 'rect',
+            'x': self.x(), 'y': self.y(), 'w': self.width, 'h': self.height,
+            'color': {'r': color.red(), 'g': color.green(), 'b': color.blue()},
+        }
+
+
 class EllipseItem(BaseGraphicsItem):
     def __init__(self, width, height, color):
         super().__init__(width, height)
@@ -86,6 +95,15 @@ class EllipseItem(BaseGraphicsItem):
         painter.setBrush(QtGui.QBrush(self.ellipse_color))
         painter.setPen(QtGui.QPen(QtGui.QColorConstants.Transparent, 1))
         painter.drawEllipse(self.boundingRect())
+
+    def to_json(self):
+        color = self.ellipse_color
+        return {
+            'type': 'ellipse',
+            'x': self.x(), 'y': self.y(), 'w': self.width, 'h': self.height,
+            'color': {'r': color.red(), 'g': color.green(), 'b': color.blue()},
+        }
+
 
 class LineItem(BaseGraphicsItem):
     def __init__(self, p1, p2, color):
@@ -102,6 +120,16 @@ class LineItem(BaseGraphicsItem):
     def paint(self, painter, option, widget=None):
         painter.setPen(QtGui.QPen(self.line_color, 3))
         painter.drawLine(self.p1, self.p2)
+
+    def to_json(self):
+        color = self.line_color
+        return {
+            'type': 'line',
+            'x1': self.p1.x(), 'y1': self.p1.y(), 'x2': self.p2.x(), 'y2': self.p2.y(),
+            'color': {'r': color.red(), 'g': color.green(), 'b': color.blue()},
+        }
+
+
 
 class CustomScene(QtWidgets.QGraphicsScene):
     def __init__(self, mouse_press_callback=None, *args, **kwargs):
@@ -166,6 +194,8 @@ class MainWindow(QtWidgets.QMainWindow):
         hbox = QtWidgets.QHBoxLayout()
         save_button = QtWidgets.QPushButton("Zapisz")
         load_button = QtWidgets.QPushButton("Otwórz")
+        save_button.clicked.connect(self.save_to_file)
+        load_button.clicked.connect(self.load_from_file)
         hbox.addWidget(save_button)
         hbox.addWidget(load_button)
         layout.addLayout(hbox)
@@ -400,6 +430,57 @@ class MainWindow(QtWidgets.QMainWindow):
             self.param_textbox.setPlainText(str(int(item.p1.x()) + int(p1.x())) + ", " + str(int(item.p1.y()) + int(p1.y())) + ", " + str(int(item.p2.x()) + int(p1.x())) + ", " + str(int(item.p2.y()) + int(p1.y())))
         elif isinstance(item, BaseGraphicsItem):
             self.param_textbox.setPlainText(str(int(p1.x())) + ", " + str(int(p1.y())) + ", " + str(int(item.width)) + ", " + str(int(item.height)))
+
+    def save_to_file(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, 'Zapisz rysunek', filter='JSON Files (*.json)')
+        if not path: return
+        data = []
+        for it in self.scene.items():
+            if hasattr(it, 'to_json'):
+                data.append(it.to_json())
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Błąd zapisu', str(e))
+
+    def load_from_file(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, 'Otwórz rysunek', filter='JSON Files (*.json)')
+        if not path: return
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Błąd odczytu', str(e)); return
+        
+        self.scene.clear()
+        for obj in data:
+            t = obj.get('type')
+            if t == 'rect':
+                x = obj['x']
+                y = obj['y']
+                w = obj['w']
+                h = obj['h']
+                color = QtGui.QColor(obj['color']['r'], obj['color']['g'], obj['color']['b'])
+                rect = RectItem(w, h, color)
+                rect.setPos(x, y)
+                self.scene.addItem(rect)
+            elif t == 'ellipse':
+                x = obj['x']
+                y = obj['y']
+                w = obj['w']
+                h = obj['h']
+                color = QtGui.QColor(obj['color']['r'], obj['color']['g'], obj['color']['b'])
+                ellipse = EllipseItem(w, h, color)
+                ellipse.setPos(x, y)
+                self.scene.addItem(ellipse)
+            elif t == 'line':
+                p1 = QtCore.QPointF(obj['x1'], obj['y1'])
+                p2 = QtCore.QPointF(obj['x2'], obj['y2'])
+                color = QtGui.QColor(obj['color']['r'], obj['color']['g'], obj['color']['b'])
+                line = LineItem(p1, p2, color)
+                self.scene.addItem(line)
+
 
 
     #     group = QtWidgets.QGroupBox("Primitives")
